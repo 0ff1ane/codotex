@@ -13,12 +13,13 @@ defmodule Codotex.Llmtp do
     ]
 
     payload =
-      JSON.encode!(%{
+      %{
         model: @model,
         usage: %{include: false},
         tools: Tools.descriptions(),
         messages: history
-      })
+      }
+      |> JSON.encode!()
 
     case HTTPoison.post(@openrouter_url, payload, headers,
            timeout: @timeout,
@@ -49,7 +50,7 @@ defmodule Codotex.Llmtp do
 
       other ->
         Logger.error("Unknown response from LLM provider: #{inspect(other)}")
-        {:error, "unknown response"}
+        {:error, other}
     end
   rescue
     err ->
