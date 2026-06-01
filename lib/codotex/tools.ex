@@ -48,7 +48,7 @@ defmodule Codotex.Tools do
           :function_not_found
       end
 
-    Logger.info("Result: #{inspect(result)}")
+    Logger.info("Result: #{trunc_long_string(inspect(result))}")
     result
   end
 
@@ -152,10 +152,30 @@ defmodule Codotex.Tools do
     }
   end
 
+  def reject_ignored_paths(paths) do
+    ignored = [
+      ".git",
+      ".gitignore",
+      ".DS_Store",
+      "_build",
+      ".elixir_ls",
+      ".formatter.exs",
+      ".tool-versions",
+      "mix.lock"
+    ]
+
+    paths
+    |> Enum.reject(fn subpath ->
+      Enum.any?(ignored, &String.starts_with?(subpath, &1))
+    end)
+  end
+
   defp list_files(path) do
     case File.stat(path) do
       {:ok, file} when file.type == :directory ->
-        File.ls!(path)
+        path
+        |> File.ls!()
+        |> reject_ignored_paths()
 
       {:ok, _} ->
         [path]
@@ -187,6 +207,8 @@ defmodule Codotex.Tools do
 
     file = read_file_by_lines(path)
     end_line = end_line || length(file)
+
+    IO.inspect({start_line, end_line, path}, label: "write_file")
 
     file
     |> Enum.with_index()

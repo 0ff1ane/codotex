@@ -6,6 +6,7 @@ defmodule Codotex do
   @prompt """
   You are a helpful coding assistant written in Elixir.
   You can write code, run tests, and help with debugging.
+  Use the tools provided to help you with your tasks.
   """
 
   @compact_prompt """
@@ -31,6 +32,76 @@ defmodule Codotex do
   def compact, do: GenServer.call(__MODULE__, :compact, @timeout)
   def approve, do: GenServer.call(__MODULE__, :approve, @timeout)
   def pending_tool_calls, do: GenServer.call(__MODULE__, :pending_tool_calls)
+
+  def generate_agent_md_file() do
+    agent_md_content = """
+    # Project Context: AGENT.md
+
+    This document provides a comprehensive overview of the project, serving as a guide for new contributors and a reference for existing team members.
+
+    ## Purpose
+
+    The primary purpose of this project is to create an Elixir-based coding assistant. This assistant should be able to:
+    - Write code in various programming languages.
+    - Run tests for the generated code.
+    - Assist in debugging code by providing insights and suggestions.
+    - Interact with the user through a conversational interface.
+
+    ## Key Features
+
+    - **Code Generation**: Generate code snippets or full solutions based on user prompts.
+    - **Test Execution**: Run tests against the generated or provided code and report results.
+    - **Debugging Assistance**: Analyze code and test failures to suggest potential fixes and improvements.
+    - **Tool Integration**: Utilize external tools and APIs (like file system operations, shell commands) to perform tasks.
+    - **Context Management**: Maintain a conversational history to understand the user's ongoing needs and project context.
+    - **Extensible Toolset**: Easily incorporate new tools to expand the assistant's capabilities.
+
+    ## Technical Stack
+
+    - **Elixir**: The core programming language for the assistant's logic and concurrency.
+    - **GenServer**: Used for managing the assistant's state and handling asynchronous operations.
+    - **LLM Provider Integration**: Interface with Large Language Models (LLMs) (e.g., OpenAI, Google Gemini) for natural language understanding and generation.
+    - **JSON**: For data serialization and communication with LLMs and tools.
+    - **File System Operations**: For reading and writing code files.
+    - **Shell Commands**: For executing tests and other system commands.
+
+    ## Setup Instructions
+
+    To set up and run the project locally, follow these steps:
+
+    1.  **Clone the Repository**:
+        ```bash
+        git clone <repository_url>
+        cd <project_directory>
+        ```
+
+    2.  **Install Dependencies**:
+        ```bash
+        mix deps.get
+        ```
+
+    3.  **Configure LLM Provider**:
+        Ensure your `.env` or configuration files are set up with the necessary API keys and endpoints for your chosen LLM provider.
+
+    4.  **Start the Application**:
+        ```bash
+        mix run --no-halt
+        ```
+
+    5.  **Interact with the Assistant**:
+        You can interact with the assistant through the `iex` console:
+        ```elixir
+        iex -S mix
+        ```
+        Then, you can use functions like `Codotex.ask("What is a GenServer?")` to interact.
+
+    ## Contributing
+
+    We welcome contributions to this project! Please refer to the `CONTRIBUTING.md` file (if available) for guidelines on how to submit pull requests, report issues, and general development practices.
+    """
+
+    Codotex.Tools.write_file("AGENT.md", agent_md_content)
+  end
 
   @impl true
   def init(opts) do
@@ -61,17 +132,21 @@ defmodule Codotex do
     case rest do
       [] ->
         # this was the last pending tool_call
-        # send the messages to the LLM Provider
-        {:ok, llm_response} = Codotex.Llmtp.call(history)
+        # call LLM Provider with messages, results and tools
+        case Codotex.Llmtp.call(history) do
+          {:ok, llm_response} ->
+            new_state =
+              process(llm_response, %{
+                state
+                | history: history ++ [llm_response],
+                  pending_tool_calls: []
+              })
 
-        new_state =
-          process(llm_response, %{
-            state
-            | history: history ++ [llm_response],
-              pending_tool_calls: []
-          })
+            {:reply, :done, new_state}
 
-        {:reply, :done, new_state}
+          err ->
+            {:reply, err, state}
+        end
 
       _ ->
         print_pending_tool_calls(rest)
@@ -81,9 +156,15 @@ defmodule Codotex do
 
   def handle_call({:ask, query}, _from, state) do
     history = state.history ++ [%{"role" => "user", "content" => query}]
-    {:ok, llm_response} = Codotex.Llmtp.call(history)
-    new_state = process(llm_response, %{state | history: history ++ [llm_response]})
-    {:reply, :done, new_state}
+
+    case Codotex.Llmtp.call(history) do
+      {:ok, llm_response} ->
+        new_state = process(llm_response, %{state | history: history ++ [llm_response]})
+        {:reply, :done, new_state}
+
+      other ->
+        {:reply, other, state}
+    end
   end
 
   @impl true
@@ -145,7 +226,7 @@ defmodule Codotex do
   end
 
   defp run_tool_call(%{"id" => tc_id, "function" => %{"name" => name, "arguments" => args}}) do
-    result = Codotex.Tools.call(name, args)
+    result = Codotex.Tools.call(name, JSON.decode!(args))
 
     %{role: "tool", tool_call_id: tc_id, content: JSON.encode!(result)}
   end
