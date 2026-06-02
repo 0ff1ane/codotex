@@ -109,32 +109,18 @@ defmodule Codotex do
       :ok
     else
       Logger.info("AGENT.md not found. Dynamically generating content...")
+
       prompt = Codotex.Prompts.project_context()
       new_history = (state.history || []) ++ [%{"role" => "user", "content" => prompt}]
 
-      case Codotex.Llmtp.call(new_history) do
-        {:ok, %{"content" => generated_content} = resp} when is_binary(generated_content) ->
-          case File.write("AGENT.md", generated_content) do
-            :ok -> Logger.info("AGENT.md successfully generated with LLM content.")
-            {:error, reason} -> Logger.error("Failed to write AGENT.md: #{reason}")
-          end
-
-        {:ok, _other_response} ->
-          Logger.warning(
-            "LLM responded with tool calls or unexpected format for AGENT.md generation."
-          )
-
-          :error
-
-        {:error, reason} ->
-          Logger.error("Failed to get LLM response for AGENT.md generation: #{inspect(reason)}")
-          :error
-      end
+      make_new_agent_md(new_history)
       |> case do
         :ok ->
+          Logger.info("AGENT.md successfully generated with LLM content.")
           {:reply, :done, %{state | history: new_history}}
 
         err ->
+          Logger.error("Failed to write AGENT.md: #{inspect(err)}")
           {:reply, err, state}
       end
     end
@@ -197,4 +183,22 @@ defmodule Codotex do
   defp extract_llm_response(%{"tool_calls" => tool_calls}), do: {:ok, :tool_calls, tool_calls}
   defp extract_llm_response(%{"content" => content}), do: {:ok, :message, content}
   defp extract_llm_response(other), do: {:error, "Unknown response #{inspect(other)}"}
+
+  defp make_new_agent_md(context) do
+    case Codotex.Llmtp.call(context) do
+      {:ok, %{"content" => generated_content}} when is_binary(generated_content) ->
+        File.write("AGENT.md", generated_content)
+
+      {:ok, _other_response} ->
+        Logger.warning(
+          "LLM responded with tool calls or unexpected format for AGENT.md generation."
+        )
+
+        :error
+
+      {:error, reason} ->
+        Logger.error("Failed to get LLM response for AGENT.md generation: #{inspect(reason)}")
+        :error
+    end
+  end
 end
