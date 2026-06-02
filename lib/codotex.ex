@@ -16,11 +16,12 @@ defmodule Codotex do
 
   def reset, do: GenServer.call(__MODULE__, :reset)
   def history, do: GenServer.call(__MODULE__, :history)
+  def pending_tool_calls, do: GenServer.call(__MODULE__, :pending_tool_calls)
   # TODO - compact should end at assistant-messages.
   # Makes no sense to compact at a cut-off of user message without the assistants' response?
   def compact, do: GenServer.call(__MODULE__, :compact, @timeout)
   def approve, do: GenServer.call(__MODULE__, :approve, @timeout)
-  def pending_tool_calls, do: GenServer.call(__MODULE__, :pending_tool_calls)
+  def generate_agent_md, do: GenServer.call(__MODULE__, :generate_agent_md, @timeout)
 
   @impl true
   def init(opts) do
@@ -86,7 +87,6 @@ defmodule Codotex do
     end
   end
 
-  @impl true
   def handle_call(:compact, _from, state) do
     new_state =
       if length(state.history) < 3 do
@@ -103,6 +103,43 @@ defmodule Codotex do
     {:reply, :done, new_state}
   end
 
+  def handle_call(:generate_agent_md, _from, state) do
+    if File.exists?("AGENT.md") do
+      Logger.info("AGENT.md already exists, skipping dynamic generation.")
+      :ok
+    else
+      Logger.info("AGENT.md not found. Dynamically generating content...")
+      prompt = Codotex.Prompts.project_context()
+      new_history = (state.history || []) ++ [%{"role" => "user", "content" => prompt}]
+
+      case Codotex.Llmtp.call(new_history) do
+        {:ok, %{"content" => generated_content} = resp} when is_binary(generated_content) ->
+          case File.write("AGENT.md", generated_content) do
+            :ok -> Logger.info("AGENT.md successfully generated with LLM content.")
+            {:error, reason} -> Logger.error("Failed to write AGENT.md: #{reason}")
+          end
+
+        {:ok, _other_response} ->
+          Logger.warning(
+            "LLM responded with tool calls or unexpected format for AGENT.md generation."
+          )
+
+          :error
+
+        {:error, reason} ->
+          Logger.error("Failed to get LLM response for AGENT.md generation: #{inspect(reason)}")
+          :error
+      end
+      |> case do
+        :ok ->
+          {:reply, :done, %{state | history: new_history}}
+
+        err ->
+          {:reply, err, state}
+      end
+    end
+  end
+
   defp initial_state(opts) do
     initial_prompt = Codotex.Prompts.main()
 
@@ -117,6 +154,7 @@ defmodule Codotex do
     Codotex.Prompts.compact() <>
       """
       \n
+
       ## Conversation
       #{JSON.encode!(messages_to_compact)}
       """
