@@ -3,17 +3,6 @@ defmodule Codotex do
 
   require Logger
 
-  @prompt """
-  You are a helpful coding assistant written in Elixir.
-  You can write code, run tests, and help with debugging.
-  Use the tools provided to help you with your tasks.
-  """
-
-  @compact_prompt """
-  Summarize our conversation so far, focus on the key decisions made and the most important pieces of information to retain.
-  I'd like to condense the message history to keep the important bits to save context size.
-  """
-
   # increase timeout for slow llm provider calls
   @timeout 120_000
 
@@ -27,81 +16,12 @@ defmodule Codotex do
 
   def reset, do: GenServer.call(__MODULE__, :reset)
   def history, do: GenServer.call(__MODULE__, :history)
+  def pending_tool_calls, do: GenServer.call(__MODULE__, :pending_tool_calls)
   # TODO - compact should end at assistant-messages.
-  # Makes no sense to compact at a cut-off a user message without the assistants' response?
+  # Makes no sense to compact at a cut-off of user message without the assistants' response?
   def compact, do: GenServer.call(__MODULE__, :compact, @timeout)
   def approve, do: GenServer.call(__MODULE__, :approve, @timeout)
-  def pending_tool_calls, do: GenServer.call(__MODULE__, :pending_tool_calls)
-
-  def generate_agent_md_file() do
-    agent_md_content = """
-    # Project Context: AGENT.md
-
-    This document provides a comprehensive overview of the project, serving as a guide for new contributors and a reference for existing team members.
-
-    ## Purpose
-
-    The primary purpose of this project is to create an Elixir-based coding assistant. This assistant should be able to:
-    - Write code in various programming languages.
-    - Run tests for the generated code.
-    - Assist in debugging code by providing insights and suggestions.
-    - Interact with the user through a conversational interface.
-
-    ## Key Features
-
-    - **Code Generation**: Generate code snippets or full solutions based on user prompts.
-    - **Test Execution**: Run tests against the generated or provided code and report results.
-    - **Debugging Assistance**: Analyze code and test failures to suggest potential fixes and improvements.
-    - **Tool Integration**: Utilize external tools and APIs (like file system operations, shell commands) to perform tasks.
-    - **Context Management**: Maintain a conversational history to understand the user's ongoing needs and project context.
-    - **Extensible Toolset**: Easily incorporate new tools to expand the assistant's capabilities.
-
-    ## Technical Stack
-
-    - **Elixir**: The core programming language for the assistant's logic and concurrency.
-    - **GenServer**: Used for managing the assistant's state and handling asynchronous operations.
-    - **LLM Provider Integration**: Interface with Large Language Models (LLMs) (e.g., OpenAI, Google Gemini) for natural language understanding and generation.
-    - **JSON**: For data serialization and communication with LLMs and tools.
-    - **File System Operations**: For reading and writing code files.
-    - **Shell Commands**: For executing tests and other system commands.
-
-    ## Setup Instructions
-
-    To set up and run the project locally, follow these steps:
-
-    1.  **Clone the Repository**:
-        ```bash
-        git clone <repository_url>
-        cd <project_directory>
-        ```
-
-    2.  **Install Dependencies**:
-        ```bash
-        mix deps.get
-        ```
-
-    3.  **Configure LLM Provider**:
-        Ensure your `.env` or configuration files are set up with the necessary API keys and endpoints for your chosen LLM provider.
-
-    4.  **Start the Application**:
-        ```bash
-        mix run --no-halt
-        ```
-
-    5.  **Interact with the Assistant**:
-        You can interact with the assistant through the `iex` console:
-        ```elixir
-        iex -S mix
-        ```
-        Then, you can use functions like `Codotex.ask("What is a GenServer?")` to interact.
-
-    ## Contributing
-
-    We welcome contributions to this project! Please refer to the `CONTRIBUTING.md` file (if available) for guidelines on how to submit pull requests, report issues, and general development practices.
-    """
-
-    Codotex.Tools.write_file("AGENT.md", agent_md_content)
-  end
+  def generate_agent_md, do: GenServer.call(__MODULE__, :generate_agent_md, @timeout)
 
   @impl true
   def init(opts) do
@@ -167,7 +87,6 @@ defmodule Codotex do
     end
   end
 
-  @impl true
   def handle_call(:compact, _from, state) do
     new_state =
       if length(state.history) < 3 do
@@ -184,18 +103,44 @@ defmodule Codotex do
     {:reply, :done, new_state}
   end
 
+  def handle_call(:generate_agent_md, _from, state) do
+    if File.exists?("AGENT.md") do
+      Logger.info("AGENT.md already exists, skipping dynamic generation.")
+      :ok
+    else
+      Logger.info("AGENT.md not found. Dynamically generating content...")
+
+      prompt = Codotex.Prompts.project_context()
+      new_history = (state.history || []) ++ [%{"role" => "user", "content" => prompt}]
+
+      make_new_agent_md(new_history)
+      |> case do
+        :ok ->
+          Logger.info("AGENT.md successfully generated with LLM content.")
+          {:reply, :done, %{state | history: new_history}}
+
+        err ->
+          Logger.error("Failed to write AGENT.md: #{inspect(err)}")
+          {:reply, err, state}
+      end
+    end
+  end
+
   defp initial_state(opts) do
+    initial_prompt = Codotex.Prompts.main()
+
     %{
       opts: opts,
-      history: [%{"role" => "system", "content" => @prompt}],
+      history: [%{"role" => "system", "content" => initial_prompt}],
       pending_tool_calls: []
     }
   end
 
   defp compact_prompt(messages_to_compact) do
-    @compact_prompt <>
+    Codotex.Prompts.compact() <>
       """
       \n
+
       ## Conversation
       #{JSON.encode!(messages_to_compact)}
       """
@@ -238,4 +183,22 @@ defmodule Codotex do
   defp extract_llm_response(%{"tool_calls" => tool_calls}), do: {:ok, :tool_calls, tool_calls}
   defp extract_llm_response(%{"content" => content}), do: {:ok, :message, content}
   defp extract_llm_response(other), do: {:error, "Unknown response #{inspect(other)}"}
+
+  defp make_new_agent_md(context) do
+    case Codotex.Llmtp.call(context) do
+      {:ok, %{"content" => generated_content}} when is_binary(generated_content) ->
+        File.write("AGENT.md", generated_content)
+
+      {:ok, _other_response} ->
+        Logger.warning(
+          "LLM responded with tool calls or unexpected format for AGENT.md generation."
+        )
+
+        :error
+
+      {:error, reason} ->
+        Logger.error("Failed to get LLM response for AGENT.md generation: #{inspect(reason)}")
+        :error
+    end
+  end
 end

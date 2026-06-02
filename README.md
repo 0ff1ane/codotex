@@ -44,19 +44,35 @@ iex> Codotex.compact()
 
 Add project context(AGENT.md)
 ```elixir
-iex> Codotex.init()
+iex> Codotex.generate_agent_md()
 ```
 
 ## Some samples
 
 # (Meta-?)prompting to add a function to create project context(AGENT.md)
 ```elixir
-iex> Codotex.ask("what would be a good prompt to ask you to generate an AGENT.md file to generate project context?")
-iex> Codotex.ask("use this prompt in a function in lib/codotex.ex to generate the AGENT.md file. check the tools used in lib/codotex/tools.ex")
+iex> "start genserver"
+iex> GenServer.start_link(Codotex, [], name: Codotex)
+
+iex> "clear old history"
+iex> Codotex.reset
+iex> Codotex.ask("check lib/codotex/prompts.ex and use the project_context prompt in a function in lib/codotex.ex to dynamically generate the AGENT.md file.")
+
+iex> "it asked 2 questions"
+iex> Codotex.ask("1. I want a summary of the project details in this folder in a useful and succint manner.\n2. Lets call the function `init`")
+iex> "LLM responded with tool_calls"
 iex> Codotex.approve()
+
+iex> "!! it created a function with static string to write into AGENT.md :facepalm:"
+iex> Codotex.ask("No, I want you to generate a function that will use Codotex.Llmtp.call and the prompt from Codotex.Prompts.project_context to dynamically generate the AGENT.md")
+
+iex> Codotex.ask("Ok, lets do it")
+iex> "LLM responded with tool_calls"
 iex> Codotex.approve()
-iex> Codotex.approve()
+
+iex> "Recompile the module"
 iex> recompile
-iex> "we now have to function to generate AGENT.md file!!"
-iex> Codotex.generate_agent_md_file()
+
+iex> "!!we now have to function to generate AGENT.md file!!"
+iex> Codotex.generate_agent_md()
 ```
