@@ -47,6 +47,12 @@ Add project context(AGENT.md)
 iex> Codotex.generate_agent_md()
 ```
 
+## TODO
+- [ ] Add tests by self, for self
+- [ ] Use streaming mode and logging for LLM provider calls
+- [ ] Calculate session token usage
+- [ ] Calculate session cost
+
 ## Some samples
 
 # (Meta-?)prompting to add a function to create project context(AGENT.md)
